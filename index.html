@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Touchable Water Orb Demo (OLED Black)</title>
+  <title>Touchable Water Orb Demo (OLED Black) + Camera Picker</title>
   <style>
     :root {
       --bg: #000;
@@ -49,10 +49,9 @@
       line-height: 1.45;
       user-select: none;
       text-shadow: 0 0 10px rgba(0,0,0,0.9);
+      z-index: 5;
     }
-    #hud b {
-      font-weight: 650;
-    }
+    #hud b { font-weight: 650; }
     #hud .badge {
       display: inline-block;
       padding: 2px 8px;
@@ -61,9 +60,73 @@
       border: 1px solid rgba(255,255,255,0.12);
       margin-right: 6px;
     }
-    #hud .warn {
-      color: var(--warn);
+    #hud .warn { color: var(--warn); }
+
+    /* Camera picker overlay */
+    #overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.86);
+      display: grid;
+      place-items: center;
+      z-index: 10;
     }
+    #panel {
+      width: min(560px, calc(100vw - 32px));
+      border-radius: 14px;
+      background: rgba(20,20,20,0.9);
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 14px 60px rgba(0,0,0,0.55);
+      padding: 18px 16px;
+      color: rgba(255,255,255,0.86);
+    }
+    #panel h1 {
+      margin: 0 0 10px 0;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    #panel p {
+      margin: 0 0 12px 0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: rgba(255,255,255,0.68);
+    }
+    #row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+    select, button {
+      appearance: none;
+      -webkit-appearance: none;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(0,0,0,0.35);
+      color: rgba(255,255,255,0.88);
+      padding: 10px 12px;
+      font-size: 14px;
+      outline: none;
+    }
+    button {
+      cursor: pointer;
+      background: rgba(90,180,255,0.20);
+      border: 1px solid rgba(90,180,255,0.35);
+      font-weight: 650;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+    #msg {
+      margin-top: 10px;
+      font-size: 12px;
+      line-height: 1.55;
+      color: rgba(255,255,255,0.70);
+      min-height: 1.6em;
+    }
+    #msg.warn { color: var(--warn); }
   </style>
 </head>
 <body>
@@ -71,11 +134,30 @@
     <video id="video" playsinline></video>
     <canvas id="fx"></canvas>
     <canvas id="main"></canvas>
+
     <div id="hud">
       <span class="badge">Webcam + Hand Tracking</span>
       <span class="badge">2D Water Orb</span><br/>
       <b>操作</b>：人差し指で球に近づいて「突く」<br/>
-      <span id="status">初期化中…</span>
+      <span id="status">カメラ選択待ち…</span>
+    </div>
+
+    <div id="overlay">
+      <div id="panel">
+        <h1>カメラを選択</h1>
+        <p>
+          外付けUSBカメラも含めて一覧表示します。最初に権限許可を経由しないと、機種名が「Camera 1」みたいに匿名になることがあります。<br/>
+          まず「一覧を更新」を押して、許可ダイアログが出たら許可してください。
+        </p>
+        <div id="row">
+          <select id="cameraSelect"></select>
+          <button id="refreshBtn">一覧を更新</button>
+        </div>
+        <div id="row" style="margin-top:10px;">
+          <button id="startBtn" style="grid-column: 1 / -1;" disabled>このカメラで開始</button>
+        </div>
+        <div id="msg"></div>
+      </div>
     </div>
   </div>
 
@@ -85,13 +167,42 @@
 
   <script>
     (() => {
-      // ==== Canvas setup ====
       const canvas = document.getElementById("main");
       const fxCanvas = document.getElementById("fx");
       const ctx = canvas.getContext("2d");
       const fx = fxCanvas.getContext("2d");
       const statusEl = document.getElementById("status");
       const videoEl = document.getElementById("video");
+
+      const overlay = document.getElementById("overlay");
+      const cameraSelect = document.getElementById("cameraSelect");
+      const refreshBtn = document.getElementById("refreshBtn");
+      const startBtn = document.getElementById("startBtn");
+      const msgEl = document.getElementById("msg");
+
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const len2 = (x, y) => Math.hypot(x, y);
+
+      const state = {
+        w: 0, h: 0, dpr: 1,
+        t: 0,
+        finger: { x: 0, y: 0, z: 0, present: false },
+        orb: {
+          x: 0, y: 0,
+          vx: 0, vy: 0,
+          r: 90,
+          wobble: 0,
+          wobbleV: 0,
+          hitGlow: 0,
+          lastHitAt: -999,
+        },
+        debug: { lastFPS: 0, fpsS: 0, fpsN: 0 },
+        ready: false,
+        warn: "",
+        stream: null,
+        camRunner: null,
+        hands: null,
+      };
 
       function resize() {
         const dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
@@ -111,29 +222,6 @@
       }
       window.addEventListener("resize", resize, { passive: true });
 
-      // ==== Utility ====
-      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-      const len2 = (x, y) => Math.hypot(x, y);
-
-      // ==== Orb physics ====
-      const state = {
-        w: 0, h: 0, dpr: 1,
-        t: 0,
-        finger: { x: 0, y: 0, z: 0, present: false, pinch: 0 },
-        orb: {
-          x: 0, y: 0,
-          vx: 0, vy: 0,
-          r: 90,
-          wobble: 0,
-          wobbleV: 0,
-          hitGlow: 0,
-          lastHitAt: -999,
-        },
-        debug: { lastFPS: 0, fpsS: 0, fpsN: 0 },
-        ready: false,
-        warn: "",
-      };
-
       function initOrb() {
         state.orb.x = state.w * 0.5;
         state.orb.y = state.h * 0.52;
@@ -142,34 +230,27 @@
         state.orb.r = Math.max(70, Math.min(state.w, state.h) * 0.10);
       }
 
-      // Orb movement model:
-      // ・中心に戻るバネ（中心点 anchor）
-      // ・速度減衰
-      // ・指が半径内に入ると押し出しインパルス
-      // ・形状のぷよ感は「周方向の波」を時間で回す
       const anchor = { x: 0, y: 0 };
+
       function stepPhysics(dt) {
         const o = state.orb;
         anchor.x = state.w * 0.5;
         anchor.y = state.h * 0.52;
 
-        const springK = 9.0;        // 復元の強さ
-        const damping = 5.0;        // 減衰
-        const wobbleK = 28.0;       // 形状波の戻り
+        const springK = 9.0;
+        const damping = 5.0;
+        const wobbleK = 28.0;
         const wobbleD = 8.0;
 
-        // Anchor spring
         const ax = (anchor.x - o.x) * springK;
         const ay = (anchor.y - o.y) * springK;
 
         o.vx += ax * dt;
         o.vy += ay * dt;
 
-        // Damping
         o.vx *= Math.exp(-damping * dt);
         o.vy *= Math.exp(-damping * dt);
 
-        // Finger interaction
         if (state.finger.present) {
           const fxp = state.finger.x * state.w;
           const fyp = state.finger.y * state.h;
@@ -180,8 +261,6 @@
           const inside = dist < (o.r * 1.05);
           const near = dist < (o.r * 1.55);
 
-          // 突き判定は「近い＋指の速度っぽいもの」を簡易に作る
-          // 速度はフレーム間差分の近似
           const pv = state.finger._pv || { x: fxp, y: fyp };
           const vdx = fxp - pv.x;
           const vdy = fyp - pv.y;
@@ -192,21 +271,17 @@
           const poke = near && fingerSpeed > 900 * state.dpr;
 
           if (inside || poke) {
-            // 押し出し方向は「指→球中心」の逆（球が逃げる）
             const nx = dx / dist;
             const ny = dy / dist;
 
-            // 押し出し強度は、内部侵入の深さと指の速度で決める
             const depth = clamp((o.r - dist) / o.r, 0, 1);
             const kick = (inside ? (4200 * depth) : 0) + (poke ? clamp(fingerSpeed, 0, 2400) * 1.3 : 0);
 
             o.vx += nx * kick * dt;
             o.vy += ny * kick * dt;
 
-            // ぷよ波を入れる
             o.wobbleV += (inside ? 18 * depth : 0) + (poke ? 12 : 0);
 
-            // 発光演出
             const now = state.t;
             if (now - o.lastHitAt > 0.05) {
               o.hitGlow = 1.0;
@@ -215,15 +290,12 @@
           }
         }
 
-        // Wobble dynamics
         o.wobbleV += (-o.wobble * wobbleK) * dt;
         o.wobbleV *= Math.exp(-wobbleD * dt);
         o.wobble += o.wobbleV * dt;
 
-        // Hit glow decay
         o.hitGlow *= Math.exp(-3.2 * dt);
 
-        // Soft bounds
         const pad = o.r * 0.65;
         if (o.x < pad) { o.x = pad; o.vx *= -0.45; }
         if (o.x > state.w - pad) { o.x = state.w - pad; o.vx *= -0.45; }
@@ -234,12 +306,10 @@
         o.y += o.vy * dt;
       }
 
-      // ==== Rendering ====
       function drawOrb() {
         const o = state.orb;
         ctx.clearRect(0, 0, state.w, state.h);
 
-        // main glow (radial)
         const glow = ctx.createRadialGradient(o.x, o.y, o.r * 0.05, o.x, o.y, o.r * 1.7);
         glow.addColorStop(0.00, `rgba(120, 220, 255, ${0.35 + 0.35 * o.hitGlow})`);
         glow.addColorStop(0.25, `rgba(50, 170, 255, ${0.22 + 0.25 * o.hitGlow})`);
@@ -250,13 +320,11 @@
         ctx.arc(o.x, o.y, o.r * 1.7, 0, Math.PI * 2);
         ctx.fill();
 
-        // blob outline with wobble
         const pts = 96;
         const baseR = o.r;
         const wob = clamp(Math.abs(o.wobble), 0, 1.2);
         const amp = baseR * (0.04 + 0.07 * wob) + baseR * 0.04 * o.hitGlow;
 
-        // highlight direction (fake light)
         const lx = -0.55;
         const ly = -0.85;
         const lN = 1 / Math.max(1e-6, Math.hypot(lx, ly));
@@ -269,13 +337,11 @@
           const ca = Math.cos(a);
           const sa = Math.sin(a);
 
-          // 波は位相を回す
           const wave =
             Math.sin(a * 3 + state.t * 3.0) * 0.55 +
             Math.sin(a * 5 - state.t * 2.2) * 0.35 +
             Math.sin(a * 9 + state.t * 1.4) * 0.18;
 
-          // 指が近い方向を少し凹ませる（触ってる感）
           let dent = 0;
           if (state.finger.present) {
             const fxp = state.finger.x * state.w;
@@ -285,13 +351,12 @@
             const fd = Math.max(1e-4, Math.hypot(dx, dy));
             const fnx = dx / fd;
             const fny = dy / fd;
-            const dot = fnx * ca + fny * sa; // 近い方向ほど1
+            const dot = fnx * ca + fny * sa;
             const near = clamp(1 - (fd / (baseR * 1.35)), 0, 1);
             dent = -amp * 0.55 * near * clamp(dot, 0, 1);
           }
 
           const rr = baseR + amp * wave + dent;
-
           const x = o.x + ca * rr;
           const y = o.y + sa * rr;
 
@@ -300,7 +365,6 @@
         }
         ctx.closePath();
 
-        // fill with gradient that suggests thickness
         const fill = ctx.createRadialGradient(o.x - baseR * 0.25, o.y - baseR * 0.35, baseR * 0.08, o.x, o.y, baseR * 1.15);
         fill.addColorStop(0.00, `rgba(170, 245, 255, ${0.90 + 0.06 * o.hitGlow})`);
         fill.addColorStop(0.22, `rgba(70, 200, 255, ${0.78 + 0.10 * o.hitGlow})`);
@@ -309,7 +373,6 @@
         ctx.fillStyle = fill;
         ctx.fill();
 
-        // rim light
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         ctx.strokeStyle = `rgba(160, 235, 255, ${0.55 + 0.35 * o.hitGlow})`;
@@ -319,7 +382,6 @@
         ctx.stroke();
         ctx.restore();
 
-        // specular highlight
         const hx = o.x + Lx * baseR * 0.42;
         const hy = o.y + Ly * baseR * 0.52;
         ctx.save();
@@ -335,7 +397,6 @@
         ctx.restore();
       }
 
-      // finger dot (subtle), on separate fx canvas so main stays clean
       function drawFinger() {
         fx.clearRect(0, 0, state.w, state.h);
         if (!state.finger.present) return;
@@ -362,14 +423,12 @@
         fx.restore();
       }
 
-      // ==== Main loop ====
       let last = performance.now();
       function tick(now) {
         const dt = clamp((now - last) / 1000, 1/240, 1/18);
         last = now;
         state.t += dt;
 
-        // FPS (HUD用)
         state.debug.fpsS += 1 / dt;
         state.debug.fpsN += 1;
         if (state.debug.fpsN >= 18) {
@@ -388,70 +447,154 @@
           const fps = state.debug.lastFPS ? state.debug.lastFPS.toFixed(0) : "…";
           statusEl.textContent = `動作中（FPS ${fps}）`;
         } else {
-          statusEl.textContent = "初期化中…";
+          statusEl.textContent = "カメラ選択待ち…";
         }
 
         requestAnimationFrame(tick);
       }
 
-      // ==== Hand tracking (MediaPipe Hands) ====
-      async function start() {
-        resize();
-        initOrb();
+      function setMsg(text, isWarn=false) {
+        msgEl.textContent = text;
+        msgEl.className = isWarn ? "warn" : "";
+      }
 
-        // iOS Safari等での自動再生制限回避のため、ユーザー操作なしでも許可が出るケースはあるが、基本はカメラ許可ダイアログに従う
-        let stream;
+      async function stopStream() {
+        if (state.camRunner && state.camRunner.stop) {
+          try { state.camRunner.stop(); } catch (e) {}
+        }
+        state.camRunner = null;
+
+        if (state.stream) {
+          for (const t of state.stream.getTracks()) t.stop();
+        }
+        state.stream = null;
+
+        videoEl.srcObject = null;
+        state.ready = false;
+      }
+
+      function populateSelect(videoInputs) {
+        cameraSelect.innerHTML = "";
+        if (!videoInputs.length) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "利用可能なカメラが見つかりません";
+          cameraSelect.appendChild(opt);
+          startBtn.disabled = true;
+          return;
+        }
+        for (let i = 0; i < videoInputs.length; i++) {
+          const d = videoInputs[i];
+          const opt = document.createElement("option");
+          opt.value = d.deviceId;
+          // ラベルが空のときは匿名名にする
+          const name = d.label && d.label.trim() ? d.label : `Camera ${i + 1}`;
+          opt.textContent = name;
+          cameraSelect.appendChild(opt);
+        }
+        startBtn.disabled = false;
+      }
+
+      async function ensurePermissionForLabels() {
+        // enumerateDevicesでlabelを出すために、最小構成で一度だけ許可を取る
+        // ここで得たストリームは即停止する
         try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 540 } },
-            audio: false
-          });
+          const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          for (const t of tmp.getTracks()) t.stop();
+          return true;
         } catch (e) {
-          state.warn = "カメラが使えません。ブラウザ権限を確認してください。";
-          console.error(e);
+          return false;
+        }
+      }
+
+      async function refreshCameras() {
+        setMsg("カメラ一覧を取得中…");
+        startBtn.disabled = true;
+
+        if (!navigator.mediaDevices?.enumerateDevices) {
+          setMsg("このブラウザはカメラ列挙に対応していません。", true);
           return;
         }
 
+        // 先に権限を取るとlabelが出やすい
+        const ok = await ensurePermissionForLabels();
+        if (!ok) {
+          setMsg("カメラ権限がありません。ブラウザの許可を確認してください。", true);
+          return;
+        }
+
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter(d => d.kind === "videoinput");
+        populateSelect(cams);
+
+        if (cams.length) {
+          setMsg(`カメラ ${cams.length} 台を検出しました。USBカメラが接続済みなら一覧に出ます。`);
+        } else {
+          setMsg("カメラが見つかりません。接続と権限を確認してください。", true);
+        }
+      }
+
+      async function startWithDeviceId(deviceId) {
+        await stopStream();
+
+        // iPad/iPhone Safariは deviceId 指定の挙動が怪しい場合があるので、
+        // その時は facingMode にフォールバックする
+        const constraints = deviceId
+          ? { video: { deviceId: { exact: deviceId }, width: { ideal: 960 }, height: { ideal: 540 } }, audio: false }
+          : { video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 540 } }, audio: false };
+
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (e) {
+          // exact指定が失敗した場合のフォールバック
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            setMsg("選択したカメラの指定に失敗したため、自動選択で開始しました。", true);
+          } catch (e2) {
+            state.warn = "カメラが使えません。ブラウザ権限を確認してください。";
+            setMsg("カメラが起動できません。権限と接続を確認してください。", true);
+            console.error(e2);
+            return;
+          }
+        }
+
+        state.stream = stream;
         videoEl.srcObject = stream;
         await videoEl.play();
 
-        const hands = new Hands({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
+        if (!state.hands) {
+          const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+          });
+          hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+          });
+          hands.onResults((results) => {
+            const lms = results.multiHandLandmarks && results.multiHandLandmarks[0];
+            if (!lms) {
+              state.finger.present = false;
+              return;
+            }
+            const tip = lms[8];
+            const mirroredX = 1.0 - tip.x;
+            state.finger.x = clamp(mirroredX, 0, 1);
+            state.finger.y = clamp(tip.y, 0, 1);
+            state.finger.z = tip.z || 0;
+            state.finger.present = true;
+          });
+          state.hands = hands;
+        }
 
-        hands.setOptions({
-          maxNumHands: 1,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.6,
-          minTrackingConfidence: 0.6
-        });
-
-        hands.onResults((results) => {
-          const lms = results.multiHandLandmarks && results.multiHandLandmarks[0];
-          if (!lms) {
-            state.finger.present = false;
-            return;
-          }
-
-          // Index finger tip = 8
-          const tip = lms[8];
-          // 画面座標に合わせる。MediaPipeはx右、y下、0..1
-          // 鏡像の方が「自分の手で触ってる」感が出ることが多いので左右反転
-          const mirroredX = 1.0 - tip.x;
-
-          state.finger.x = clamp(mirroredX, 0, 1);
-          state.finger.y = clamp(tip.y, 0, 1);
-          state.finger.z = tip.z || 0;
-          state.finger.present = true;
-        });
-
-        // Camera utilsでフレーム送信
+        // Camera runner（video要素のフレームをhandsへ送る）
         const cam = new Camera(videoEl, {
           onFrame: async () => {
             try {
-              await hands.send({ image: videoEl });
+              await state.hands.send({ image: videoEl });
             } catch (e) {
-              // たまに送信が詰まる環境があるので握りつぶしつつログ
               console.warn(e);
             }
           },
@@ -459,13 +602,48 @@
           height: 540
         });
         cam.start();
+        state.camRunner = cam;
 
         state.ready = true;
+        state.warn = "";
+        overlay.style.display = "none";
+        initOrb();
+        setMsg("");
       }
 
-      // Start render loop immediately, start camera async
+      // UI events
+      refreshBtn.addEventListener("click", () => {
+        refreshCameras().catch(e => {
+          console.error(e);
+          setMsg("カメラ一覧の取得でエラーが発生しました。", true);
+        });
+      });
+
+      startBtn.addEventListener("click", () => {
+        const id = cameraSelect.value;
+        startWithDeviceId(id).catch(e => {
+          console.error(e);
+          setMsg("開始処理でエラーが発生しました。", true);
+        });
+      });
+
+      // USB抜き差しで更新したくなるので自動で追従
+      if (navigator.mediaDevices?.addEventListener) {
+        navigator.mediaDevices.addEventListener("devicechange", () => {
+          // 選択画面が出ているときだけ更新
+          if (overlay.style.display !== "none") {
+            refreshCameras().catch(() => {});
+          }
+        });
+      }
+
+      // init
+      resize();
+      initOrb();
       requestAnimationFrame(tick);
-      start();
+
+      // 初期表示：まず一覧更新を促す
+      setMsg("「一覧を更新」を押してカメラ権限を許可してください。");
     })();
   </script>
 </body>
