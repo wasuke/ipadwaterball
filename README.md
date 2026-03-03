@@ -75,7 +75,7 @@
 ## プロジェクト構成
 
 /
-├── index.html
+├── index.html<br>
 └── README.md
 
 単一HTMLファイル構成のため、そのままGitHub Pagesで公開可能です。
