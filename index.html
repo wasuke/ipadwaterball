@@ -309,94 +309,102 @@
       function drawOrb() {
         const o = state.orb;
         ctx.clearRect(0, 0, state.w, state.h);
-
-        const glow = ctx.createRadialGradient(o.x, o.y, o.r * 0.05, o.x, o.y, o.r * 1.7);
-        glow.addColorStop(0.00, `rgba(120, 220, 255, ${0.35 + 0.35 * o.hitGlow})`);
-        glow.addColorStop(0.25, `rgba(50, 170, 255, ${0.22 + 0.25 * o.hitGlow})`);
-        glow.addColorStop(0.65, `rgba(10, 90, 255, ${0.10 + 0.18 * o.hitGlow})`);
-        glow.addColorStop(1.00, "rgba(0,0,0,0)");
-        ctx.fillStyle = glow;
-        ctx.beginPath();
-        ctx.arc(o.x, o.y, o.r * 1.7, 0, Math.PI * 2);
-        ctx.fill();
-
-        const pts = 96;
-        const baseR = o.r;
-        const wob = clamp(Math.abs(o.wobble), 0, 1.2);
-        const amp = baseR * (0.04 + 0.07 * wob) + baseR * 0.04 * o.hitGlow;
-
-        const lx = -0.55;
-        const ly = -0.85;
-        const lN = 1 / Math.max(1e-6, Math.hypot(lx, ly));
-        const Lx = lx * lN;
-        const Ly = ly * lN;
-
-        ctx.beginPath();
-        for (let i = 0; i <= pts; i++) {
-          const a = (i / pts) * Math.PI * 2;
-          const ca = Math.cos(a);
-          const sa = Math.sin(a);
-
-          const wave =
-            Math.sin(a * 3 + state.t * 3.0) * 0.55 +
-            Math.sin(a * 5 - state.t * 2.2) * 0.35 +
-            Math.sin(a * 9 + state.t * 1.4) * 0.18;
-
-          let dent = 0;
-          if (state.finger.present) {
-            const fxp = state.finger.x * state.w;
-            const fyp = state.finger.y * state.h;
-            const dx = fxp - o.x;
-            const dy = fyp - o.y;
-            const fd = Math.max(1e-4, Math.hypot(dx, dy));
-            const fnx = dx / fd;
-            const fny = dy / fd;
-            const dot = fnx * ca + fny * sa;
-            const near = clamp(1 - (fd / (baseR * 1.35)), 0, 1);
-            dent = -amp * 0.55 * near * clamp(dot, 0, 1);
-          }
-
-          const rr = baseR + amp * wave + dent;
-          const x = o.x + ca * rr;
-          const y = o.y + sa * rr;
-
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.closePath();
-
-        const fill = ctx.createRadialGradient(o.x - baseR * 0.25, o.y - baseR * 0.35, baseR * 0.08, o.x, o.y, baseR * 1.15);
-        fill.addColorStop(0.00, `rgba(170, 245, 255, ${0.90 + 0.06 * o.hitGlow})`);
-        fill.addColorStop(0.22, `rgba(70, 200, 255, ${0.78 + 0.10 * o.hitGlow})`);
-        fill.addColorStop(0.62, `rgba(25, 120, 255, ${0.54 + 0.12 * o.hitGlow})`);
-        fill.addColorStop(1.00, `rgba(0, 50, 150, ${0.35 + 0.10 * o.hitGlow})`);
-        ctx.fillStyle = fill;
-        ctx.fill();
-
+      
+        const r = o.r;
+        const x = o.x;
+        const y = o.y;
+      
+        // 外側のソフトグロー（輪郭線ではなく、光のにじみ）
         ctx.save();
         ctx.globalCompositeOperation = "screen";
-        ctx.strokeStyle = `rgba(160, 235, 255, ${0.55 + 0.35 * o.hitGlow})`;
-        ctx.lineWidth = Math.max(1.5, 2.5 * state.dpr);
-        ctx.shadowColor = "rgba(80,200,255,0.7)";
-        ctx.shadowBlur = 18 * state.dpr;
-        ctx.stroke();
+        const outer = ctx.createRadialGradient(x, y, r * 0.10, x, y, r * 1.85);
+        outer.addColorStop(0.00, `rgba(120, 220, 255, ${0.22 + 0.26 * o.hitGlow})`);
+        outer.addColorStop(0.35, `rgba(40, 160, 255, ${0.12 + 0.20 * o.hitGlow})`);
+        outer.addColorStop(0.80, `rgba(10, 80, 255, ${0.04 + 0.10 * o.hitGlow})`);
+        outer.addColorStop(1.00, "rgba(0,0,0,0)");
+        ctx.fillStyle = outer;
+        ctx.beginPath();
+        ctx.arc(x, y, r * 1.85, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
-
-        const hx = o.x + Lx * baseR * 0.42;
-        const hy = o.y + Ly * baseR * 0.52;
+      
+        // 球本体は真円。以降は内部だけを描画する
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.clip();
+      
+        // ベースの体積感（真円グラデーション）
+        const base = ctx.createRadialGradient(x - r * 0.25, y - r * 0.35, r * 0.10, x, y, r * 1.20);
+        base.addColorStop(0.00, `rgba(190, 250, 255, ${0.88 + 0.06 * o.hitGlow})`);
+        base.addColorStop(0.25, `rgba(80, 205, 255, ${0.70 + 0.10 * o.hitGlow})`);
+        base.addColorStop(0.70, `rgba(25, 120, 255, ${0.48 + 0.12 * o.hitGlow})`);
+        base.addColorStop(1.00, `rgba(0, 40, 140, ${0.32 + 0.10 * o.hitGlow})`);
+        ctx.fillStyle = base;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      
+        // 内部の揺らぎ：ゆっくり流れる濃淡（疑似カースティクス）
+        // 形状を揺らさず、内部だけが動くのが狙い
         ctx.save();
         ctx.globalCompositeOperation = "screen";
-        const hi = ctx.createRadialGradient(hx, hy, baseR * 0.03, hx, hy, baseR * 0.38);
-        hi.addColorStop(0.00, `rgba(255,255,255,${0.55 + 0.25 * o.hitGlow})`);
-        hi.addColorStop(0.30, `rgba(180,240,255,${0.25 + 0.20 * o.hitGlow})`);
+      
+        const t = state.t;
+        const wob = clamp(Math.abs(o.wobble), 0, 1.4);
+        const flow = 0.35 + 0.55 * wob + 0.35 * o.hitGlow;
+      
+        // 複数の“柔らかい斑点”を重ねて流体っぽいムラを作る
+        for (let i = 0; i < 7; i++) {
+          const a = t * (0.65 + i * 0.07) + i * 1.7;
+          const px = x + Math.cos(a * 1.10) * r * (0.18 + 0.10 * Math.sin(a * 0.9));
+          const py = y + Math.sin(a * 0.95) * r * (0.20 + 0.10 * Math.cos(a * 1.1));
+          const rr = r * (0.35 + 0.12 * Math.sin(a * 1.3));
+          const g = ctx.createRadialGradient(px, py, rr * 0.05, px, py, rr);
+          g.addColorStop(0.00, `rgba(200, 255, 255, ${0.10 * flow})`);
+          g.addColorStop(0.35, `rgba(120, 220, 255, ${0.07 * flow})`);
+          g.addColorStop(1.00, "rgba(0,0,0,0)");
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(px, py, rr, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      
+        // うねる筋（流れの方向感）
+        ctx.globalAlpha = 0.55 * flow;
+        ctx.lineWidth = Math.max(1.0, 1.6 * state.dpr);
+        ctx.strokeStyle = "rgba(160, 235, 255, 0.12)";
+        for (let k = 0; k < 5; k++) {
+          const phase = t * (0.9 + k * 0.06) + k * 2.1;
+          ctx.beginPath();
+          for (let s = 0; s <= 40; s++) {
+            const u = (s / 40) * 2 - 1; // -1..1
+            const bend = Math.sin(phase + u * 2.6) * 0.22 + Math.sin(phase * 0.7 + u * 5.2) * 0.10;
+            const xx = x + u * r * 0.90;
+            const yy = y + (bend + (k - 2) * 0.12) * r;
+            if (s === 0) ctx.moveTo(xx, yy);
+            else ctx.lineTo(xx, yy);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      
+        // ハイライト（ガラスっぽい反射）。輪郭線は引かない
+        ctx.save();
+        ctx.globalCompositeOperation = "screen";
+        const hx = x - r * 0.28;
+        const hy = y - r * 0.42;
+        const hi = ctx.createRadialGradient(hx, hy, r * 0.03, hx, hy, r * 0.55);
+        hi.addColorStop(0.00, `rgba(255,255,255,${0.40 + 0.25 * o.hitGlow})`);
+        hi.addColorStop(0.25, `rgba(190,245,255,${0.18 + 0.18 * o.hitGlow})`);
         hi.addColorStop(1.00, "rgba(0,0,0,0)");
         ctx.fillStyle = hi;
         ctx.beginPath();
-        ctx.arc(hx, hy, baseR * 0.42, 0, Math.PI * 2);
+        ctx.arc(hx, hy, r * 0.62, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
+      
+        ctx.restore(); // clip end
       }
-
+            
       function drawFinger() {
         fx.clearRect(0, 0, state.w, state.h);
         if (!state.finger.present) return;
