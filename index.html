@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>iPad Water Ball Demo (Camera Picker + Stable USB)</title>
+  <title>iPad Water Ball Demo (2 Hands / 2 Fingers)</title>
   <style>
     :root {
       --bg: #000;
@@ -17,30 +17,17 @@
       overflow: hidden;
       font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
     }
-    #stage {
-      position: fixed;
-      inset: 0;
-      background: var(--bg);
-    }
-    canvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-    }
+    #stage { position: fixed; inset: 0; background: var(--bg); }
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
     #video {
       position: absolute;
-      left: -9999px;
-      top: -9999px;
-      width: 640px;
-      height: 480px;
-      opacity: 0;
-      pointer-events: none;
+      left: -9999px; top: -9999px;
+      width: 640px; height: 480px;
+      opacity: 0; pointer-events: none;
     }
     #hud {
       position: absolute;
-      left: 14px;
-      top: 12px;
+      left: 14px; top: 12px;
       color: var(--ui);
       font-size: 12px;
       line-height: 1.45;
@@ -59,13 +46,10 @@
     }
     #hud .warn { color: var(--warn); }
 
-    /* Camera picker overlay */
     #overlay {
-      position: absolute;
-      inset: 0;
+      position: absolute; inset: 0;
       background: rgba(0,0,0,0.86);
-      display: grid;
-      place-items: center;
+      display: grid; place-items: center;
       z-index: 10;
     }
     #panel {
@@ -77,27 +61,11 @@
       padding: 18px 16px;
       color: rgba(255,255,255,0.86);
     }
-    #panel h1 {
-      margin: 0 0 10px 0;
-      font-size: 16px;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-    }
-    #panel p {
-      margin: 0 0 12px 0;
-      font-size: 12px;
-      line-height: 1.55;
-      color: rgba(255,255,255,0.68);
-    }
-    #row {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
-      align-items: center;
-    }
+    #panel h1 { margin: 0 0 10px 0; font-size: 16px; font-weight: 700; letter-spacing: 0.02em; }
+    #panel p { margin: 0 0 12px 0; font-size: 12px; line-height: 1.55; color: rgba(255,255,255,0.68); }
+    #row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
     select, button {
-      appearance: none;
-      -webkit-appearance: none;
+      appearance: none; -webkit-appearance: none;
       border-radius: 10px;
       border: 1px solid rgba(255,255,255,0.14);
       background: rgba(0,0,0,0.35);
@@ -112,17 +80,8 @@
       border: 1px solid rgba(90,180,255,0.35);
       font-weight: 650;
     }
-    button:disabled {
-      cursor: not-allowed;
-      opacity: 0.6;
-    }
-    #msg {
-      margin-top: 10px;
-      font-size: 12px;
-      line-height: 1.55;
-      color: rgba(255,255,255,0.70);
-      min-height: 1.6em;
-    }
+    button:disabled { cursor: not-allowed; opacity: 0.6; }
+    #msg { margin-top: 10px; font-size: 12px; line-height: 1.55; color: rgba(255,255,255,0.70); min-height: 1.6em; }
     #msg.warn { color: var(--warn); }
   </style>
 </head>
@@ -134,8 +93,8 @@
 
     <div id="hud">
       <span class="badge">Webcam + Hand Tracking</span>
-      <span class="badge">2D Water Orb</span><br/>
-      <b>操作</b>：人差し指で球に近づいて「突く」<br/>
+      <span class="badge">2 Hands / 2 Fingers</span><br/>
+      <b>操作</b>：左右の人差し指で同時に球を突けます<br/>
       <span id="status">カメラ選択待ち…</span>
     </div>
 
@@ -158,7 +117,6 @@
     </div>
   </div>
 
-  <!-- MediaPipe Hands (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 
   <script>
@@ -182,7 +140,10 @@
       const state = {
         w: 0, h: 0, dpr: 1,
         t: 0,
-        finger: { x: 0, y: 0, z: 0, present: false },
+        fingers: [
+          { x: 0, y: 0, present: false, _pv: null }, // 0: Right
+          { x: 0, y: 0, present: false, _pv: null }, // 1: Left
+        ],
         orb: {
           x: 0, y: 0,
           vx: 0, vy: 0,
@@ -247,9 +208,11 @@
         o.vx *= Math.exp(-damping * dt);
         o.vy *= Math.exp(-damping * dt);
 
-        if (state.finger.present) {
-          const fxp = state.finger.x * state.w;
-          const fyp = state.finger.y * state.h;
+        for (const f of state.fingers) {
+          if (!f.present) continue;
+
+          const fxp = f.x * state.w;
+          const fyp = f.y * state.h;
 
           const dx = o.x - fxp;
           const dy = o.y - fyp;
@@ -257,11 +220,11 @@
           const inside = dist < (o.r * 1.05);
           const near = dist < (o.r * 1.55);
 
-          const pv = state.finger._pv || { x: fxp, y: fyp };
+          const pv = f._pv || { x: fxp, y: fyp };
           const vdx = fxp - pv.x;
           const vdy = fyp - pv.y;
           pv.x = fxp; pv.y = fyp;
-          state.finger._pv = pv;
+          f._pv = pv;
 
           const fingerSpeed = len2(vdx, vdy) / Math.max(1e-4, dt);
           const poke = near && fingerSpeed > 900 * state.dpr;
@@ -302,57 +265,71 @@
         o.y += o.vy * dt;
       }
 
-      // 形状変形（凹み）＋内部揺らぎ（球内部のみ）
-      function drawOrb() {
+      function buildBlobPath() {
         const o = state.orb;
-        ctx.clearRect(0, 0, state.w, state.h);
-
         const x = o.x, y = o.y, r = o.r;
 
-        // 指→球中心の方向（凹み方向）と凹み量
-        let dentDirX = 0, dentDirY = 0, dentAmount = 0;
+        const dents = [];
+        for (const f of state.fingers) {
+          if (!f.present) continue;
 
-        if (state.finger.present) {
-          const fxp = state.finger.x * state.w;
-          const fyp = state.finger.y * state.h;
+          const fxp = f.x * state.w;
+          const fyp = f.y * state.h;
           const dx = fxp - x;
           const dy = fyp - y;
           const d = Math.max(1e-4, Math.hypot(dx, dy));
-          dentDirX = dx / d;
-          dentDirY = dy / d;
+
+          const dirX = dx / d;
+          const dirY = dy / d;
 
           const near = clamp(1 - (d / (r * 1.20)), 0, 1);
           const wob = clamp(Math.abs(o.wobble), 0, 1.4);
 
-          dentAmount = r * (0.12 * near + 0.08 * near * wob + 0.10 * near * o.hitGlow);
-          dentAmount = clamp(dentAmount, 0, r * 0.30);
+          let amount = r * (0.11 * near + 0.08 * near * wob + 0.10 * near * o.hitGlow);
+          amount = clamp(amount, 0, r * 0.28);
+
+          dents.push({ dirX, dirY, amount });
         }
 
-        // 変形パスをPath2Dで保持（これをクリップと塗りに使う）
         const blob = new Path2D();
-        const pts = 140;
+        const pts = 160;
+
         for (let i = 0; i <= pts; i++) {
           const a = (i / pts) * Math.PI * 2;
           const ca = Math.cos(a);
           const sa = Math.sin(a);
 
-          const dot = ca * dentDirX + sa * dentDirY;
-          const forward = clamp(dot, 0, 1);
-          const back = clamp(-dot, 0, 1);
+          let dentSum = 0;
+          let bulgeSum = 0;
 
-          const dent = -dentAmount * Math.pow(forward, 2.2);
-          const bulge = dentAmount * 0.22 * Math.pow(back, 1.6);
+          for (const d of dents) {
+            const dot = ca * d.dirX + sa * d.dirY;
+            const forward = clamp(dot, 0, 1);
+            const back = clamp(-dot, 0, 1);
 
-          const rr = r + dent + bulge;
+            dentSum += (-d.amount * Math.pow(forward, 2.2));
+            bulgeSum += (d.amount * 0.18 * Math.pow(back, 1.6));
+          }
+
+          const rr = r + dentSum + bulgeSum;
           const px = x + ca * rr;
           const py = y + sa * rr;
 
           if (i === 0) blob.moveTo(px, py);
           else blob.lineTo(px, py);
         }
-        blob.closePath();
 
-        // 外側のソフトグロー
+        blob.closePath();
+        return blob;
+      }
+
+      function drawOrb() {
+        const o = state.orb;
+        ctx.clearRect(0, 0, state.w, state.h);
+
+        const x = o.x, y = o.y, r = o.r;
+        const blob = buildBlobPath();
+
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         const outer = ctx.createRadialGradient(x, y, r * 0.12, x, y, r * 1.95);
@@ -366,11 +343,9 @@
         ctx.fill();
         ctx.restore();
 
-        // 変形形状でクリップして内部だけ描く
         ctx.save();
         ctx.clip(blob);
 
-        // ベース塗り（変形形状をそのまま塗る）
         const base = ctx.createRadialGradient(x - r * 0.25, y - r * 0.35, r * 0.10, x, y, r * 1.25);
         base.addColorStop(0.00, `rgba(190,250,255,${0.86 + 0.06 * o.hitGlow})`);
         base.addColorStop(0.25, `rgba(80,205,255,${0.68 + 0.10 * o.hitGlow})`);
@@ -379,7 +354,6 @@
         ctx.fillStyle = base;
         ctx.fill(blob);
 
-        // 内部の揺らぎ
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         const t = state.t;
@@ -401,7 +375,6 @@
           ctx.fill();
         }
 
-        // うねる筋
         ctx.globalAlpha = 0.55 * flow;
         ctx.lineWidth = Math.max(1.0, 1.6 * state.dpr);
         ctx.strokeStyle = "rgba(160,235,255,0.12)";
@@ -420,7 +393,6 @@
         }
         ctx.restore();
 
-        // ハイライト（輪郭線なし）
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         const hx = x - r * 0.28;
@@ -435,32 +407,37 @@
         ctx.fill();
         ctx.restore();
 
-        ctx.restore(); // clip解除
+        ctx.restore();
       }
 
-      function drawFinger() {
+      function drawFingers() {
         fx.clearRect(0, 0, state.w, state.h);
-        if (!state.finger.present) return;
-
-        const x = state.finger.x * state.w;
-        const y = state.finger.y * state.h;
 
         fx.save();
         fx.globalCompositeOperation = "screen";
-        const r = Math.max(6, 10 * state.dpr);
-        const g = fx.createRadialGradient(x, y, 0, x, y, r * 6.0);
-        g.addColorStop(0.00, "rgba(120,220,255,0.55)");
-        g.addColorStop(0.25, "rgba(80,180,255,0.22)");
-        g.addColorStop(1.00, "rgba(0,0,0,0)");
-        fx.fillStyle = g;
-        fx.beginPath();
-        fx.arc(x, y, r * 6.0, 0, Math.PI * 2);
-        fx.fill();
+        const baseR = Math.max(6, 10 * state.dpr);
 
-        fx.fillStyle = "rgba(220,250,255,0.55)";
-        fx.beginPath();
-        fx.arc(x, y, r, 0, Math.PI * 2);
-        fx.fill();
+        for (const f of state.fingers) {
+          if (!f.present) continue;
+
+          const x = f.x * state.w;
+          const y = f.y * state.h;
+
+          const g = fx.createRadialGradient(x, y, 0, x, y, baseR * 6.0);
+          g.addColorStop(0.00, "rgba(120,220,255,0.55)");
+          g.addColorStop(0.25, "rgba(80,180,255,0.22)");
+          g.addColorStop(1.00, "rgba(0,0,0,0)");
+          fx.fillStyle = g;
+          fx.beginPath();
+          fx.arc(x, y, baseR * 6.0, 0, Math.PI * 2);
+          fx.fill();
+
+          fx.fillStyle = "rgba(220,250,255,0.55)";
+          fx.beginPath();
+          fx.arc(x, y, baseR, 0, Math.PI * 2);
+          fx.fill();
+        }
+
         fx.restore();
       }
 
@@ -480,7 +457,7 @@
 
         stepPhysics(dt);
         drawOrb();
-        drawFinger();
+        drawFingers();
 
         if (state.warn) {
           statusEl.innerHTML = `<span class="warn">${state.warn}</span>`;
@@ -499,9 +476,7 @@
         msgEl.className = isWarn ? "warn" : "";
       }
 
-      function stopHandPump() {
-        state.pump.running = false;
-      }
+      function stopHandPump() { state.pump.running = false; }
 
       function startHandPump() {
         state.pump.running = true;
@@ -510,16 +485,13 @@
         const step = async (now) => {
           if (!state.pump.running) return;
 
-          // 30fps程度に間引く（iPadで安定しやすい）
           if (now - state.pump.last > 33) {
             state.pump.last = now;
             try {
               if (videoEl.readyState >= 2 && state.hands) {
                 await state.hands.send({ image: videoEl });
               }
-            } catch (e) {
-              // 一時詰まりは無視
-            }
+            } catch (e) {}
           }
           requestAnimationFrame(step);
         };
@@ -528,6 +500,11 @@
 
       async function stopStream() {
         stopHandPump();
+
+        for (const f of state.fingers) {
+          f.present = false;
+          f._pv = null;
+        }
 
         if (state.stream) {
           for (const t of state.stream.getTracks()) t.stop();
@@ -597,7 +574,6 @@
       async function startWithDeviceId(deviceId) {
         await stopStream();
 
-        // iPad Safariは exact deviceId が外れることがあるのでフォールバックあり
         const constraints = deviceId
           ? { video: { deviceId: { exact: deviceId }, width: { ideal: 960 }, height: { ideal: 540 } }, audio: false }
           : { video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 540 } }, audio: false };
@@ -612,7 +588,6 @@
           } catch (e2) {
             state.warn = "カメラが使えません。ブラウザ権限を確認してください。";
             setMsg("カメラが起動できません。権限と接続を確認してください。", true);
-            console.error(e2);
             return;
           }
         }
@@ -625,28 +600,50 @@
           const hands = new Hands({
             locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
           });
+
           hands.setOptions({
-            maxNumHands: 1,
+            maxNumHands: 2,
             modelComplexity: 1,
             minDetectionConfidence: 0.6,
             minTrackingConfidence: 0.6
           });
+
           hands.onResults((results) => {
-            const lms = results.multiHandLandmarks && results.multiHandLandmarks[0];
-            if (!lms) {
-              state.finger.present = false;
-              return;
+            const handsLm = results.multiHandLandmarks || [];
+            const handed = results.multiHandedness || [];
+
+            for (const f of state.fingers) f.present = false;
+
+            for (let i = 0; i < handsLm.length && i < 2; i++) {
+              const lms = handsLm[i];
+              const info = handed[i];
+              if (!lms || !info) continue;
+
+              const label = info.label; // "Left" or "Right" (手の実体ベース)
+              const tip = lms[8];       // index fingertip
+
+              if (!tip) continue;
+
+              // 鏡像表示に合わせてxは反転
+              const mx = 1.0 - tip.x;
+              const my = tip.y;
+
+              // 画面側では「右手・左手」を固定スロットに入れる
+              // labelは"Left/Right"なので、スロットは Right=0, Left=1 として保持
+              const slot = (label === "Right") ? 0 : 1;
+              state.fingers[slot].x = clamp(mx, 0, 1);
+              state.fingers[slot].y = clamp(my, 0, 1);
+              state.fingers[slot].present = true;
             }
-            const tip = lms[8];
-            const mirroredX = 1.0 - tip.x;
-            state.finger.x = clamp(mirroredX, 0, 1);
-            state.finger.y = clamp(tip.y, 0, 1);
-            state.finger.present = true;
+
+            for (const f of state.fingers) {
+              if (!f.present) f._pv = null;
+            }
           });
+
           state.hands = hands;
         }
 
-        // camera_utilsを使わず、自前でvideoフレームをhandsへ流す
         startHandPump();
 
         state.ready = true;
@@ -657,29 +654,20 @@
       }
 
       refreshBtn.addEventListener("click", () => {
-        refreshCameras().catch(e => {
-          console.error(e);
-          setMsg("カメラ一覧の取得でエラーが発生しました。", true);
-        });
+        refreshCameras().catch(() => setMsg("カメラ一覧の取得でエラーが発生しました。", true));
       });
 
       startBtn.addEventListener("click", () => {
         const id = cameraSelect.value;
-        startWithDeviceId(id).catch(e => {
-          console.error(e);
-          setMsg("開始処理でエラーが発生しました。", true);
-        });
+        startWithDeviceId(id).catch(() => setMsg("開始処理でエラーが発生しました。", true));
       });
 
       if (navigator.mediaDevices?.addEventListener) {
         navigator.mediaDevices.addEventListener("devicechange", () => {
-          if (overlay.style.display !== "none") {
-            refreshCameras().catch(() => {});
-          }
+          if (overlay.style.display !== "none") refreshCameras().catch(() => {});
         });
       }
 
-      // init
       resize();
       initOrb();
       requestAnimationFrame(tick);
