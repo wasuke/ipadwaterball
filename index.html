@@ -344,7 +344,7 @@
           const back = clamp(-dot, 0, 1);
       
           // 指側だけ凹む（指数で丸く）
-          const dent = -dentAmount * Math.pow(forward, 2.2);
+          const dent = -dentAmount * Math.pow(forward, 3.2);
       
           // 反対側は少しだけ膨らむ（内部圧っぽさ）
           const bulge = dentAmount * 0.22 * Math.pow(back, 1.6);
