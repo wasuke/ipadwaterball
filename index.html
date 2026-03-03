@@ -310,49 +310,97 @@
         const o = state.orb;
         ctx.clearRect(0, 0, state.w, state.h);
       
-        const r = o.r;
         const x = o.x;
         const y = o.y;
+        const r = o.r;
       
-        // 外側のソフトグロー（輪郭線ではなく、光のにじみ）
+        // 指の位置から「凹み方向」と「凹み量」を作る
+        let dentDirX = 0, dentDirY = 0;
+        let dentAmount = 0;
+      
+        if (state.finger.present) {
+          const fxp = state.finger.x * state.w;
+          const fyp = state.finger.y * state.h;
+          const dx = fxp - x;
+          const dy = fyp - y;
+          const d = Math.max(1e-4, Math.hypot(dx, dy));
+      
+          dentDirX = dx / d;
+          dentDirY = dy / d;
+      
+          // 近いほど凹む。球の少し外から効き始める
+          const near = clamp(1 - (d / (r * 1.25)), 0, 1);
+      
+          // 物理のヒット（o.hitGlow）と形状エネルギー（o.wobble）も凹みに混ぜる
+          const wob = clamp(Math.abs(o.wobble), 0, 1.4);
+      
+          // 凹み量（ピクセル）。過剰に凹むと破綻するので上限を絞る
+          dentAmount = r * (0.10 * near + 0.06 * near * wob + 0.08 * near * o.hitGlow);
+          dentAmount = clamp(dentAmount, 0, r * 0.26);
+        }
+      
+        // 変形した球のパスを作る（輪郭線は描かない、塗りとクリップに使う）
+        const pts = 120;
+        ctx.save();
+        ctx.beginPath();
+        for (let i = 0; i <= pts; i++) {
+          const a = (i / pts) * Math.PI * 2;
+          const ca = Math.cos(a);
+          const sa = Math.sin(a);
+      
+          // 凹みは指方向に向いた部分だけ効かせる（cosで前方だけ）
+          const forward = clamp(ca * dentDirX + sa * dentDirY, 0, 1);
+      
+          // 凹みの形を「中心が一番凹む山」にする。指数で先端を尖らせない
+          const dent = -dentAmount * Math.pow(forward, 2.1);
+      
+          // 小さな内部圧の反動（凹んだ分、反対側が少しだけ膨らむ）
+          const back = clamp(-(ca * dentDirX + sa * dentDirY), 0, 1);
+          const bulge = dentAmount * 0.22 * Math.pow(back, 1.6);
+      
+          const rr = r + dent + bulge;
+          const px = x + ca * rr;
+          const py = y + sa * rr;
+      
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      
+        // 外側のソフトグロー（形状に追従させるため、パスの外接円でにじませる）
         ctx.save();
         ctx.globalCompositeOperation = "screen";
-        const outer = ctx.createRadialGradient(x, y, r * 0.10, x, y, r * 1.85);
-        outer.addColorStop(0.00, `rgba(120, 220, 255, ${0.22 + 0.26 * o.hitGlow})`);
-        outer.addColorStop(0.35, `rgba(40, 160, 255, ${0.12 + 0.20 * o.hitGlow})`);
-        outer.addColorStop(0.80, `rgba(10, 80, 255, ${0.04 + 0.10 * o.hitGlow})`);
+        const outer = ctx.createRadialGradient(x, y, r * 0.10, x, y, r * 1.95);
+        outer.addColorStop(0.00, `rgba(120, 220, 255, ${0.18 + 0.24 * o.hitGlow})`);
+        outer.addColorStop(0.40, `rgba(40, 160, 255, ${0.10 + 0.18 * o.hitGlow})`);
+        outer.addColorStop(0.85, `rgba(10, 80, 255, ${0.03 + 0.08 * o.hitGlow})`);
         outer.addColorStop(1.00, "rgba(0,0,0,0)");
         ctx.fillStyle = outer;
         ctx.beginPath();
-        ctx.arc(x, y, r * 1.85, 0, Math.PI * 2);
+        ctx.arc(x, y, r * 1.95, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       
-        // 球本体は真円。以降は内部だけを描画する
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
+        // 球内部だけ描くためにクリップ
         ctx.clip();
       
-        // ベースの体積感（真円グラデーション）
-        const base = ctx.createRadialGradient(x - r * 0.25, y - r * 0.35, r * 0.10, x, y, r * 1.20);
-        base.addColorStop(0.00, `rgba(190, 250, 255, ${0.88 + 0.06 * o.hitGlow})`);
-        base.addColorStop(0.25, `rgba(80, 205, 255, ${0.70 + 0.10 * o.hitGlow})`);
-        base.addColorStop(0.70, `rgba(25, 120, 255, ${0.48 + 0.12 * o.hitGlow})`);
-        base.addColorStop(1.00, `rgba(0, 40, 140, ${0.32 + 0.10 * o.hitGlow})`);
+        // ベースの体積感（塗り）
+        const base = ctx.createRadialGradient(x - r * 0.25, y - r * 0.35, r * 0.10, x, y, r * 1.25);
+        base.addColorStop(0.00, `rgba(190, 250, 255, ${0.86 + 0.06 * o.hitGlow})`);
+        base.addColorStop(0.25, `rgba(80, 205, 255, ${0.68 + 0.10 * o.hitGlow})`);
+        base.addColorStop(0.70, `rgba(25, 120, 255, ${0.46 + 0.12 * o.hitGlow})`);
+        base.addColorStop(1.00, `rgba(0, 40, 140, ${0.30 + 0.10 * o.hitGlow})`);
         ctx.fillStyle = base;
-        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+        ctx.fillRect(x - r * 1.4, y - r * 1.4, r * 2.8, r * 2.8);
       
-        // 内部の揺らぎ：ゆっくり流れる濃淡（疑似カースティクス）
-        // 形状を揺らさず、内部だけが動くのが狙い
+        // 内部の揺らぎ（濃淡の流れ）
         ctx.save();
         ctx.globalCompositeOperation = "screen";
       
         const t = state.t;
         const wob = clamp(Math.abs(o.wobble), 0, 1.4);
-        const flow = 0.35 + 0.55 * wob + 0.35 * o.hitGlow;
+        const flow = 0.32 + 0.52 * wob + 0.36 * o.hitGlow;
       
-        // 複数の“柔らかい斑点”を重ねて流体っぽいムラを作る
         for (let i = 0; i < 7; i++) {
           const a = t * (0.65 + i * 0.07) + i * 1.7;
           const px = x + Math.cos(a * 1.10) * r * (0.18 + 0.10 * Math.sin(a * 0.9));
@@ -368,7 +416,7 @@
           ctx.fill();
         }
       
-        // うねる筋（流れの方向感）
+        // うねる筋
         ctx.globalAlpha = 0.55 * flow;
         ctx.lineWidth = Math.max(1.0, 1.6 * state.dpr);
         ctx.strokeStyle = "rgba(160, 235, 255, 0.12)";
@@ -376,7 +424,7 @@
           const phase = t * (0.9 + k * 0.06) + k * 2.1;
           ctx.beginPath();
           for (let s = 0; s <= 40; s++) {
-            const u = (s / 40) * 2 - 1; // -1..1
+            const u = (s / 40) * 2 - 1;
             const bend = Math.sin(phase + u * 2.6) * 0.22 + Math.sin(phase * 0.7 + u * 5.2) * 0.10;
             const xx = x + u * r * 0.90;
             const yy = y + (bend + (k - 2) * 0.12) * r;
@@ -387,14 +435,14 @@
         }
         ctx.restore();
       
-        // ハイライト（ガラスっぽい反射）。輪郭線は引かない
+        // 反射ハイライト（輪郭線なし）
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         const hx = x - r * 0.28;
         const hy = y - r * 0.42;
         const hi = ctx.createRadialGradient(hx, hy, r * 0.03, hx, hy, r * 0.55);
-        hi.addColorStop(0.00, `rgba(255,255,255,${0.40 + 0.25 * o.hitGlow})`);
-        hi.addColorStop(0.25, `rgba(190,245,255,${0.18 + 0.18 * o.hitGlow})`);
+        hi.addColorStop(0.00, `rgba(255,255,255,${0.38 + 0.25 * o.hitGlow})`);
+        hi.addColorStop(0.25, `rgba(190,245,255,${0.16 + 0.18 * o.hitGlow})`);
         hi.addColorStop(1.00, "rgba(0,0,0,0)");
         ctx.fillStyle = hi;
         ctx.beginPath();
@@ -402,9 +450,9 @@
         ctx.fill();
         ctx.restore();
       
-        ctx.restore(); // clip end
+        ctx.restore();
       }
-            
+      
       function drawFinger() {
         fx.clearRect(0, 0, state.w, state.h);
         if (!state.finger.present) return;
