@@ -3,13 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Touchable Water Orb Demo (OLED Black) + Camera Picker</title>
+  <title>iPad Water Ball Demo (Camera Picker + Stable USB)</title>
   <style>
     :root {
       --bg: #000;
-      --orb-core: rgba(60, 170, 255, 0.95);
-      --orb-mid: rgba(25, 120, 255, 0.55);
-      --orb-faint: rgba(0, 80, 200, 0.18);
       --ui: rgba(255,255,255,0.78);
       --warn: rgba(255,120,120,0.9);
     }
@@ -146,7 +143,7 @@
       <div id="panel">
         <h1>カメラを選択</h1>
         <p>
-          外付けUSBカメラも含めて一覧表示します。最初に権限許可を経由しないと、機種名が「Camera 1」みたいに匿名になることがあります。<br/>
+          外付けUSBカメラも含めて一覧表示します。最初に権限許可を経由しないと、機種名が匿名になることがあります。<br/>
           まず「一覧を更新」を押して、許可ダイアログが出たら許可してください。
         </p>
         <div id="row">
@@ -163,7 +160,6 @@
 
   <!-- MediaPipe Hands (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
   <script>
     (() => {
@@ -200,8 +196,8 @@
         ready: false,
         warn: "",
         stream: null,
-        camRunner: null,
         hands: null,
+        pump: { running: false, last: 0 },
       };
 
       function resize() {
@@ -306,15 +302,16 @@
         o.y += o.vy * dt;
       }
 
+      // 形状変形（凹み）＋内部揺らぎ（球内部のみ）
       function drawOrb() {
         const o = state.orb;
         ctx.clearRect(0, 0, state.w, state.h);
-      
+
         const x = o.x, y = o.y, r = o.r;
-      
+
         // 指→球中心の方向（凹み方向）と凹み量
         let dentDirX = 0, dentDirY = 0, dentAmount = 0;
-      
+
         if (state.finger.present) {
           const fxp = state.finger.x * state.w;
           const fyp = state.finger.y * state.h;
@@ -323,14 +320,14 @@
           const d = Math.max(1e-4, Math.hypot(dx, dy));
           dentDirX = dx / d;
           dentDirY = dy / d;
-      
+
           const near = clamp(1 - (d / (r * 1.20)), 0, 1);
           const wob = clamp(Math.abs(o.wobble), 0, 1.4);
-      
+
           dentAmount = r * (0.12 * near + 0.08 * near * wob + 0.10 * near * o.hitGlow);
           dentAmount = clamp(dentAmount, 0, r * 0.30);
         }
-      
+
         // 変形パスをPath2Dで保持（これをクリップと塗りに使う）
         const blob = new Path2D();
         const pts = 140;
@@ -338,27 +335,24 @@
           const a = (i / pts) * Math.PI * 2;
           const ca = Math.cos(a);
           const sa = Math.sin(a);
-      
-          const dot = ca * dentDirX + sa * dentDirY;       // 指方向に近いほど +1
+
+          const dot = ca * dentDirX + sa * dentDirY;
           const forward = clamp(dot, 0, 1);
           const back = clamp(-dot, 0, 1);
-      
-          // 指側だけ凹む（指数で丸く）
-          const dent = -dentAmount * Math.pow(forward, 3.2);
-      
-          // 反対側は少しだけ膨らむ（内部圧っぽさ）
+
+          const dent = -dentAmount * Math.pow(forward, 2.2);
           const bulge = dentAmount * 0.22 * Math.pow(back, 1.6);
-      
+
           const rr = r + dent + bulge;
           const px = x + ca * rr;
           const py = y + sa * rr;
-      
+
           if (i === 0) blob.moveTo(px, py);
           else blob.lineTo(px, py);
         }
         blob.closePath();
-      
-        // 外側のソフトグロー（枠線ではなく光のにじみ）
+
+        // 外側のソフトグロー
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         const outer = ctx.createRadialGradient(x, y, r * 0.12, x, y, r * 1.95);
@@ -371,12 +365,12 @@
         ctx.arc(x, y, r * 1.95, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
-      
-        // 変形形状でクリップして「内部だけ」描く
+
+        // 変形形状でクリップして内部だけ描く
         ctx.save();
         ctx.clip(blob);
-      
-        // ベース塗り（変形形状そのものを塗る）
+
+        // ベース塗り（変形形状をそのまま塗る）
         const base = ctx.createRadialGradient(x - r * 0.25, y - r * 0.35, r * 0.10, x, y, r * 1.25);
         base.addColorStop(0.00, `rgba(190,250,255,${0.86 + 0.06 * o.hitGlow})`);
         base.addColorStop(0.25, `rgba(80,205,255,${0.68 + 0.10 * o.hitGlow})`);
@@ -384,14 +378,14 @@
         base.addColorStop(1.00, `rgba(0,40,140,${0.30 + 0.10 * o.hitGlow})`);
         ctx.fillStyle = base;
         ctx.fill(blob);
-      
-        // 内部の揺らぎ（濃淡の流れ）
+
+        // 内部の揺らぎ
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         const t = state.t;
         const wob = clamp(Math.abs(o.wobble), 0, 1.4);
         const flow = 0.30 + 0.55 * wob + 0.35 * o.hitGlow;
-      
+
         for (let i = 0; i < 7; i++) {
           const a = t * (0.65 + i * 0.07) + i * 1.7;
           const px = x + Math.cos(a * 1.10) * r * (0.18 + 0.10 * Math.sin(a * 0.9));
@@ -406,7 +400,7 @@
           ctx.arc(px, py, rr, 0, Math.PI * 2);
           ctx.fill();
         }
-      
+
         // うねる筋
         ctx.globalAlpha = 0.55 * flow;
         ctx.lineWidth = Math.max(1.0, 1.6 * state.dpr);
@@ -425,8 +419,8 @@
           ctx.stroke();
         }
         ctx.restore();
-      
-        // 反射ハイライト（輪郭線なし）
+
+        // ハイライト（輪郭線なし）
         ctx.save();
         ctx.globalCompositeOperation = "screen";
         const hx = x - r * 0.28;
@@ -440,10 +434,10 @@
         ctx.arc(hx, hy, r * 0.70, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
-      
+
         ctx.restore(); // clip解除
       }
-      
+
       function drawFinger() {
         fx.clearRect(0, 0, state.w, state.h);
         if (!state.finger.present) return;
@@ -505,17 +499,40 @@
         msgEl.className = isWarn ? "warn" : "";
       }
 
+      function stopHandPump() {
+        state.pump.running = false;
+      }
+
+      function startHandPump() {
+        state.pump.running = true;
+        state.pump.last = 0;
+
+        const step = async (now) => {
+          if (!state.pump.running) return;
+
+          // 30fps程度に間引く（iPadで安定しやすい）
+          if (now - state.pump.last > 33) {
+            state.pump.last = now;
+            try {
+              if (videoEl.readyState >= 2 && state.hands) {
+                await state.hands.send({ image: videoEl });
+              }
+            } catch (e) {
+              // 一時詰まりは無視
+            }
+          }
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }
+
       async function stopStream() {
-        if (state.camRunner && state.camRunner.stop) {
-          try { state.camRunner.stop(); } catch (e) {}
-        }
-        state.camRunner = null;
+        stopHandPump();
 
         if (state.stream) {
           for (const t of state.stream.getTracks()) t.stop();
         }
         state.stream = null;
-
         videoEl.srcObject = null;
         state.ready = false;
       }
@@ -534,7 +551,6 @@
           const d = videoInputs[i];
           const opt = document.createElement("option");
           opt.value = d.deviceId;
-          // ラベルが空のときは匿名名にする
           const name = d.label && d.label.trim() ? d.label : `Camera ${i + 1}`;
           opt.textContent = name;
           cameraSelect.appendChild(opt);
@@ -543,8 +559,6 @@
       }
 
       async function ensurePermissionForLabels() {
-        // enumerateDevicesでlabelを出すために、最小構成で一度だけ許可を取る
-        // ここで得たストリームは即停止する
         try {
           const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
           for (const t of tmp.getTracks()) t.stop();
@@ -563,7 +577,6 @@
           return;
         }
 
-        // 先に権限を取るとlabelが出やすい
         const ok = await ensurePermissionForLabels();
         if (!ok) {
           setMsg("カメラ権限がありません。ブラウザの許可を確認してください。", true);
@@ -584,8 +597,7 @@
       async function startWithDeviceId(deviceId) {
         await stopStream();
 
-        // iPad/iPhone Safariは deviceId 指定の挙動が怪しい場合があるので、
-        // その時は facingMode にフォールバックする
+        // iPad Safariは exact deviceId が外れることがあるのでフォールバックあり
         const constraints = deviceId
           ? { video: { deviceId: { exact: deviceId }, width: { ideal: 960 }, height: { ideal: 540 } }, audio: false }
           : { video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 540 } }, audio: false };
@@ -594,7 +606,6 @@
         try {
           stream = await navigator.mediaDevices.getUserMedia(constraints);
         } catch (e) {
-          // exact指定が失敗した場合のフォールバック
           try {
             stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
             setMsg("選択したカメラの指定に失敗したため、自動選択で開始しました。", true);
@@ -630,26 +641,13 @@
             const mirroredX = 1.0 - tip.x;
             state.finger.x = clamp(mirroredX, 0, 1);
             state.finger.y = clamp(tip.y, 0, 1);
-            state.finger.z = tip.z || 0;
             state.finger.present = true;
           });
           state.hands = hands;
         }
 
-        // Camera runner（video要素のフレームをhandsへ送る）
-        const cam = new Camera(videoEl, {
-          onFrame: async () => {
-            try {
-              await state.hands.send({ image: videoEl });
-            } catch (e) {
-              console.warn(e);
-            }
-          },
-          width: 960,
-          height: 540
-        });
-        cam.start();
-        state.camRunner = cam;
+        // camera_utilsを使わず、自前でvideoフレームをhandsへ流す
+        startHandPump();
 
         state.ready = true;
         state.warn = "";
@@ -658,7 +656,6 @@
         setMsg("");
       }
 
-      // UI events
       refreshBtn.addEventListener("click", () => {
         refreshCameras().catch(e => {
           console.error(e);
@@ -674,10 +671,8 @@
         });
       });
 
-      // USB抜き差しで更新したくなるので自動で追従
       if (navigator.mediaDevices?.addEventListener) {
         navigator.mediaDevices.addEventListener("devicechange", () => {
-          // 選択画面が出ているときだけ更新
           if (overlay.style.display !== "none") {
             refreshCameras().catch(() => {});
           }
@@ -688,8 +683,6 @@
       resize();
       initOrb();
       requestAnimationFrame(tick);
-
-      // 初期表示：まず一覧更新を促す
       setMsg("「一覧を更新」を押してカメラ権限を許可してください。");
     })();
   </script>
