@@ -209,21 +209,24 @@ function createBalls(n){
   state.balls = [];
 
   const baseR = Math.max(46, Math.min(state.w, state.h) * 0.07);
+  const spacing = baseR * 2.4;
 
-  // 球どうしの間隔。2.4倍くらい取ると重なりにくい
-  const spacing = baseR * 3.4;
-
-  // 全体幅
   const totalWidth = (n - 1) * spacing;
-
-  // 画面中央を基準に左右へ並べる
   const startX = state.w * 0.5 - totalWidth / 2;
   const y = state.h * 0.52;
 
   for(let i = 0; i < n; i++){
+
+    const px = startX + i * spacing;
+
     state.balls.push({
-      x: startX + i * spacing,
+      x: px,
       y: y,
+
+      // ← それぞれの戻り位置
+      anchorX: px,
+      anchorY: y,
+
       vx: 0,
       vy: 0,
       r: baseR,
@@ -239,8 +242,8 @@ function stepPhysics(dt){
     const anchorX = state.w*0.5;
     const anchorY = state.h*0.52;
 
-    b.vx += (anchorX - b.x) * 5.5 * dt;
-    b.vy += (anchorY - b.y) * 5.5 * dt;
+    b.vx += (b.anchorX - b.x) * 5.5 * dt;
+    b.vy += (b.anchorY - b.y) * 5.5 * dt;
 
     for(const f of state.fingers){
       if(!f.present) continue;
