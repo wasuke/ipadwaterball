@@ -239,8 +239,6 @@ function stepPhysics(dt){
 
   for(const b of state.balls){
 
-    const anchorX = state.w*0.5;
-    const anchorY = state.h*0.52;
 
     b.vx += (b.anchorX - b.x) * 5.5 * dt;
     b.vy += (b.anchorY - b.y) * 5.5 * dt;
