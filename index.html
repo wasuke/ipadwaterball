@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Water Ball Demo (Ball Count Select)</title>
+<title>Water Ball Demo</title>
 
 <style>
 :root{
@@ -208,16 +208,26 @@ addEventListener("resize", resize);
 function createBalls(n){
   state.balls = [];
 
-  for(let i=0;i<n;i++){
-    const angle = (Math.PI*2/n)*i;
-    const radius = Math.min(state.w,state.h)*0.18;
+  const baseR = Math.max(46, Math.min(state.w, state.h) * 0.07);
 
+  // 球どうしの間隔。2.4倍くらい取ると重なりにくい
+  const spacing = baseR * 2.4;
+
+  // 全体幅
+  const totalWidth = (n - 1) * spacing;
+
+  // 画面中央を基準に左右へ並べる
+  const startX = state.w * 0.5 - totalWidth / 2;
+  const y = state.h * 0.52;
+
+  for(let i = 0; i < n; i++){
     state.balls.push({
-      x: state.w*0.5 + Math.cos(angle)*radius,
-      y: state.h*0.52 + Math.sin(angle)*radius,
-      vx:0, vy:0,
-      r: Math.max(46, Math.min(state.w,state.h)*0.07),
-      glow:0
+      x: startX + i * spacing,
+      y: y,
+      vx: 0,
+      vy: 0,
+      r: baseR,
+      glow: 0
     });
   }
 }
