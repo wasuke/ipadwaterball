@@ -185,9 +185,11 @@ const state = {
   stream:null,
   hands:null,
   pump:false,
-  fingers:[
-    {x:0,y:0,present:false,_pv:null},
-    {x:0,y:0,present:false,_pv:null}
+  fingers: [
+  { x: 0, y: 0, present: false, _pv: null }, // Right index
+  { x: 0, y: 0, present: false, _pv: null }, // Right thumb
+  { x: 0, y: 0, present: false, _pv: null }, // Left index
+  { x: 0, y: 0, present: false, _pv: null }  // Left thumb
   ],
   balls:[]
 };
@@ -208,7 +210,7 @@ addEventListener("resize", resize);
 function createBalls(n){
   state.balls = [];
 
-  const baseR = Math.max(70, Math.min(state.w, state.h) * 0.07);
+  const baseR = Math.max(200, Math.min(state.w, state.h) * 0.07);
   const spacing = baseR * 2.4;
 
   const totalWidth = (n - 1) * spacing;
@@ -237,12 +239,18 @@ function createBalls(n){
 
 function stepPhysics(dt){
 
+  // 1. 各球に、戻る力と指からの力を加える
   for(const b of state.balls){
 
+    // 球ごとの戻り位置。未設定なら現在の中央配置にフォールバック
+    const anchorX = (b.anchorX !== undefined) ? b.anchorX : state.w * 0.5;
+    const anchorY = (b.anchorY !== undefined) ? b.anchorY : state.h * 0.52;
 
-    b.vx += (b.anchorX - b.x) * 5.5 * dt;
-    b.vy += (b.anchorY - b.y) * 5.5 * dt;
+    // 戻る力
+    b.vx += (anchorX - b.x) * 5.5 * dt;
+    b.vy += (anchorY - b.y) * 5.5 * dt;
 
+    // 指との相互作用
     for(const f of state.fingers){
       if(!f.present) continue;
 
@@ -251,7 +259,7 @@ function stepPhysics(dt){
 
       const dx = b.x - fxp;
       const dy = b.y - fyp;
-      const d = Math.max(0.001, len(dx,dy));
+      const d = Math.max(0.001, len(dx, dy));
 
       if(d < b.r * 1.3){
         const nx = dx / d;
@@ -262,52 +270,351 @@ function stepPhysics(dt){
         b.glow = 1;
       }
     }
+  }
 
+  // 2. いったん移動
+  for(const b of state.balls){
     b.vx *= Math.exp(-3.0 * dt);
     b.vy *= Math.exp(-3.0 * dt);
 
     b.x += b.vx;
     b.y += b.vy;
+  }
 
+  // 3. 球どうしの衝突
+  //    ・重なりを解消
+  //    ・衝突方向の速度だけ反発
+  //    ・反発係数を下げて減衰
+  const restitution = 0.72; // 1より小さいほど勢いが減る
+  const tangentDamping = 0.985; // 接触時の横滑りも少し減衰
+
+  for(let i = 0; i < state.balls.length; i++){
+    for(let j = i + 1; j < state.balls.length; j++){
+
+      const a = state.balls[i];
+      const b = state.balls[j];
+
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dist = Math.hypot(dx, dy);
+
+      const minDist = a.r + b.r;
+
+      if(dist === 0){
+        dx = 0.001;
+        dy = 0;
+        dist = 0.001;
+      }
+
+      if(dist < minDist){
+        const nx = dx / dist;
+        const ny = dy / dist;
+
+        // 重なりを半分ずつ押し戻す
+        const overlap = minDist - dist;
+        const push = overlap * 0.5;
+
+        a.x -= nx * push;
+        a.y -= ny * push;
+        b.x += nx * push;
+        b.y += ny * push;
+
+        // 相対速度
+        const rvx = b.vx - a.vx;
+        const rvy = b.vy - a.vy;
+
+        // 法線方向の相対速度
+        const velAlongNormal = rvx * nx + rvy * ny;
+
+        // 近づいているときだけ反発
+        if(velAlongNormal < 0){
+          // 質量は半径に比例でもよいが、ここでは同一質量で扱う
+          const impulse = -(1 + restitution) * velAlongNormal / 2;
+
+          const ix = impulse * nx;
+          const iy = impulse * ny;
+
+          a.vx -= ix;
+          a.vy -= iy;
+          b.vx += ix;
+          b.vy += iy;
+        }
+
+        // 接線方向の速度を少し落として、ぶつかるほど勢いが減る感じを強める
+        const tx = -ny;
+        const ty = nx;
+
+        const vaT = a.vx * tx + a.vy * ty;
+        const vbT = b.vx * tx + b.vy * ty;
+
+        const vaN = a.vx * nx + a.vy * ny;
+        const vbN = b.vx * nx + b.vy * ny;
+
+        a.vx = nx * vaN + tx * (vaT * tangentDamping);
+        a.vy = ny * vaN + ty * (vaT * tangentDamping);
+        b.vx = nx * vbN + tx * (vbT * tangentDamping);
+        b.vy = ny * vbN + ty * (vbT * tangentDamping);
+
+        a.glow = Math.max(a.glow, 0.45);
+        b.glow = Math.max(b.glow, 0.45);
+      }
+    }
+  }
+
+  // 4. 画面端との衝突
+  for(const b of state.balls){
     const pad = b.r * 0.2;
 
-    if(b.x < pad){ b.x = pad; b.vx *= -0.45; }
-    if(b.x > state.w-pad){ b.x = state.w-pad; b.vx *= -0.45; }
-    if(b.y < pad){ b.y = pad; b.vy *= -0.45; }
-    if(b.y > state.h-pad){ b.y = state.h-pad; b.vy *= -0.45; }
+    if(b.x < pad){
+      b.x = pad;
+      b.vx *= -0.45;
+    }
+    if(b.x > state.w - pad){
+      b.x = state.w - pad;
+      b.vx *= -0.45;
+    }
+    if(b.y < pad){
+      b.y = pad;
+      b.vy *= -0.45;
+    }
+    if(b.y > state.h - pad){
+      b.y = state.h - pad;
+      b.vy *= -0.45;
+    }
 
     b.glow *= Math.exp(-3.0 * dt);
   }
 }
 
 function drawBall(b){
+  const t = state.t || 0;
+  const hit = b.glow || 0;
 
-  const outer = ctx.createRadialGradient(
-    b.x,b.y,b.r*0.1,
-    b.x,b.y,b.r*1.8
+  // 呼吸するような微小変動
+  const pulse = 0.5 + 0.5 * Math.sin(t * 1.2 + b.x * 0.002 + b.y * 0.0015);
+
+  // 1) 背面のにじみ
+  // 本体より少し右下にずらして、奥に層がある感じを作る
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  const backGlow = ctx.createRadialGradient(
+    b.x + b.r * 0.16,
+    b.y + b.r * 0.20,
+    b.r * 0.08,
+    b.x + b.r * 0.16,
+    b.y + b.r * 0.20,
+    b.r * 1.15
   );
-  outer.addColorStop(0,"rgba(130,220,255,"+(0.25+b.glow*0.3)+")");
-  outer.addColorStop(.5,"rgba(40,150,255,.12)");
-  outer.addColorStop(1,"rgba(0,0,0,0)");
+  backGlow.addColorStop(0.00, `rgba(50,140,255,${0.06 + hit * 0.06})`);
+  backGlow.addColorStop(0.45, `rgba(20,90,220,${0.05 + hit * 0.05})`);
+  backGlow.addColorStop(1.00, "rgba(0,0,0,0)");
+  ctx.fillStyle = backGlow;
+  ctx.beginPath();
+  ctx.arc(b.x + b.r * 0.10, b.y + b.r * 0.12, b.r * 1.10, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 
+  // 2) 外側グロー
+  // 完全な同心円ではなく、少し左上寄りにして「物体感」を出す
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  const outer = ctx.createRadialGradient(
+    b.x - b.r * 0.10,
+    b.y - b.r * 0.12,
+    b.r * 0.10,
+    b.x,
+    b.y,
+    b.r * 1.90
+  );
+  outer.addColorStop(0.00, `rgba(130,225,255,${0.18 + hit * 0.20})`);
+  outer.addColorStop(0.30, `rgba(70,180,255,${0.12 + hit * 0.12})`);
+  outer.addColorStop(0.70, `rgba(15,90,220,${0.05 + hit * 0.05})`);
+  outer.addColorStop(1.00, "rgba(0,0,0,0)");
   ctx.fillStyle = outer;
   ctx.beginPath();
-  ctx.arc(b.x,b.y,b.r*1.8,0,Math.PI*2);
+  ctx.arc(b.x, b.y, b.r * 1.90, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
 
-  const g = ctx.createRadialGradient(
-    b.x-b.r*0.3,b.y-b.r*0.4,b.r*0.1,
-    b.x,b.y,b.r
-  );
-  g.addColorStop(0,"rgba(220,255,255,.95)");
-  g.addColorStop(.3,"rgba(90,220,255,.75)");
-  g.addColorStop(.75,"rgba(20,120,255,.48)");
-  g.addColorStop(1,"rgba(0,50,140,.28)");
-
-  ctx.fillStyle = g;
+  // 3) 本体クリップ
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(b.x,b.y,b.r,0,Math.PI*2);
+  ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+  ctx.clip();
+
+  // 4) ベースの球
+  // 外周を少し暗くして、回り込みを強調
+  const base = ctx.createRadialGradient(
+    b.x - b.r * 0.32,
+    b.y - b.r * 0.40,
+    b.r * 0.08,
+    b.x,
+    b.y,
+    b.r * 1.02
+  );
+  base.addColorStop(0.00, `rgba(235,255,255,${0.96})`);
+  base.addColorStop(0.18, `rgba(150,235,255,${0.86})`);
+  base.addColorStop(0.48, `rgba(55,175,255,${0.68})`);
+  base.addColorStop(0.78, `rgba(18,95,215,${0.52})`);
+  base.addColorStop(0.92, `rgba(6,48,145,${0.46})`);
+  base.addColorStop(1.00, `rgba(0,20,80,${0.42})`);
+  ctx.fillStyle = base;
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
   ctx.fill();
+
+  // 5) 下側の内部影
+  // 表面の影ではなく、中に層がある感じを狙う
+  const innerShadow = ctx.createRadialGradient(
+    b.x,
+    b.y + b.r * 0.42,
+    b.r * 0.08,
+    b.x,
+    b.y + b.r * 0.42,
+    b.r * 0.98
+  );
+  innerShadow.addColorStop(0.00, "rgba(0,35,110,0)");
+  innerShadow.addColorStop(0.55, `rgba(0,28,90,${0.10 + 0.03 * pulse})`);
+  innerShadow.addColorStop(1.00, `rgba(0,12,50,${0.28 + 0.05 * hit})`);
+  ctx.fillStyle = innerShadow;
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 6) 球内部の流体っぽい濃淡
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  for(let i = 0; i < 4; i++){
+    const a = t * (0.55 + i * 0.08) + i * 1.7 + b.x * 0.001;
+    const px = b.x + Math.cos(a) * b.r * (0.18 + 0.05 * i);
+    const py = b.y + Math.sin(a * 0.9) * b.r * (0.14 + 0.04 * i);
+    const rr = b.r * (0.26 + 0.05 * Math.sin(a * 1.3));
+
+    const flow = ctx.createRadialGradient(px, py, rr * 0.02, px, py, rr);
+    flow.addColorStop(0.00, `rgba(220,255,255,${0.08 + 0.02 * hit})`);
+    flow.addColorStop(0.45, `rgba(120,220,255,${0.05 + 0.02 * hit})`);
+    flow.addColorStop(1.00, "rgba(0,0,0,0)");
+    ctx.fillStyle = flow;
+    ctx.beginPath();
+    ctx.arc(px, py, rr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // 7) 前面の丸いハイライト
+  // 左上に大きめの柔らかい反射
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  const hx = b.x - b.r * 0.28 + Math.sin(t * 0.8 + b.x * 0.001) * b.r * 0.015;
+  const hy = b.y - b.r * 0.38 + Math.cos(t * 0.7 + b.y * 0.001) * b.r * 0.012;
+
+  const hi = ctx.createRadialGradient(
+    hx, hy, b.r * 0.03,
+    hx, hy, b.r * 0.55
+  );
+  hi.addColorStop(0.00, `rgba(255,255,255,${0.42 + hit * 0.18})`);
+  hi.addColorStop(0.18, `rgba(220,250,255,${0.28 + hit * 0.14})`);
+  hi.addColorStop(0.55, `rgba(150,230,255,${0.10 + hit * 0.08})`);
+  hi.addColorStop(1.00, "rgba(0,0,0,0)");
+  ctx.fillStyle = hi;
+  ctx.beginPath();
+  ctx.arc(hx, hy, b.r * 0.60, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 8) 細い反射帯
+  // 前面に透明膜がある感じを出す
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  ctx.translate(b.x - b.r * 0.16, b.y - b.r * 0.20);
+  ctx.rotate(-0.62);
+  ctx.scale(1.0, 0.42);
+
+  const band = ctx.createRadialGradient(0, 0, 0, 0, 0, b.r * 0.44);
+  band.addColorStop(0.00, `rgba(255,255,255,${0.18 + hit * 0.14})`);
+  band.addColorStop(0.28, `rgba(220,245,255,${0.10 + hit * 0.10})`);
+  band.addColorStop(1.00, "rgba(0,0,0,0)");
+  ctx.fillStyle = band;
+  ctx.beginPath();
+  ctx.arc(0, 0, b.r * 0.44, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 9) 内側リム
+  // 輪郭線ではなく、輪郭の内側だけうっすら光らせる
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  ctx.lineWidth = Math.max(1.2, b.r * 0.045);
+  ctx.strokeStyle = `rgba(160,230,255,${0.08 + hit * 0.07})`;
+  ctx.beginPath();
+  ctx.arc(b.x, b.y, b.r * 0.965, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // 10) 接触時の局所反応
+  // 指が近い側だけ少し光ると、立体物っぽく感じやすい
+  let nearest = null;
+  let nearestDist = Infinity;
+
+  for(const f of state.fingers){
+    if(!f.present) continue;
+    const fxp = f.x * state.w;
+    const fyp = f.y * state.h;
+    const d = Math.hypot(fxp - b.x, fyp - b.y);
+    if(d < nearestDist){
+      nearestDist = d;
+      nearest = { x: fxp, y: fyp };
+    }
+  }
+
+  if(nearest){
+    const dx = nearest.x - b.x;
+    const dy = nearest.y - b.y;
+    const d = Math.max(0.001, Math.hypot(dx, dy));
+    const near = clamp(1 - d / (b.r * 1.6), 0, 1);
+
+    if(near > 0){
+      const sx = b.x + dx * 0.22;
+      const sy = b.y + dy * 0.22;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      const react = ctx.createRadialGradient(
+        sx, sy, b.r * 0.02,
+        sx, sy, b.r * 0.34
+      );
+      react.addColorStop(0.00, `rgba(255,255,255,${0.12 * near + 0.16 * hit})`);
+      react.addColorStop(0.30, `rgba(170,235,255,${0.10 * near + 0.10 * hit})`);
+      react.addColorStop(1.00, "rgba(0,0,0,0)");
+      ctx.fillStyle = react;
+      ctx.beginPath();
+      ctx.arc(sx, sy, b.r * 0.36, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  ctx.restore(); // clip end
+
+  // 11) ごく弱い副像
+  // 半透明板の空中像っぽさを少しだけ足す
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  const ghost = ctx.createRadialGradient(
+    b.x - b.r * 0.04,
+    b.y - b.r * 0.03,
+    b.r * 0.15,
+    b.x - b.r * 0.04,
+    b.y - b.r * 0.03,
+    b.r * 0.95
+  );
+  ghost.addColorStop(0.00, `rgba(120,200,255,${0.015 + 0.01 * pulse})`);
+  ghost.addColorStop(1.00, "rgba(0,0,0,0)");
+  ctx.fillStyle = ghost;
+  ctx.beginPath();
+  ctx.arc(b.x - b.r * 0.04, b.y - b.r * 0.03, b.r * 0.95, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawFingers(){
@@ -408,23 +715,64 @@ async function startSystem(){
     minTrackingConfidence:0.6
   });
 
-  hands.onResults((results)=>{
-
-    for(const f of state.fingers) f.present = false;
-
-    const lms = results.multiHandLandmarks || [];
+  hands.onResults((results) => {
+    const handsLm = results.multiHandLandmarks || [];
     const handed = results.multiHandedness || [];
 
-    for(let i=0;i<lms.length;i++){
+    // 4本に増やす
+    // 0: Right index
+    // 1: Right thumb
+    // 2: Left index
+    // 3: Left thumb
+    while (state.fingers.length < 4) {
+      state.fingers.push({ x: 0, y: 0, present: false, _pv: null });
+    }
 
-      const tip = lms[i][8];
-      const label = handed[i]?.label || "Right";
+    for (const f of state.fingers) f.present = false;
 
-      const slot = label==="Right" ? 0 : 1;
+    for (let i = 0; i < handsLm.length && i < 2; i++) {
+      const lms = handsLm[i];
+      const info = handed[i];
+      if (!lms || !info) continue;
 
-      state.fingers[slot].x = 1 - tip.x;
-      state.fingers[slot].y = tip.y;
-      state.fingers[slot].present = true;
+      const label = info.label; // "Left" or "Right"
+
+      const indexTip = lms[8];  // 人差し指先端
+      const thumbTip = lms[4];  // 親指先端
+
+      if (!indexTip || !thumbTip) continue;
+
+      const ix = clamp(1.0 - indexTip.x, 0, 1);
+      const iy = clamp(indexTip.y, 0, 1);
+
+      const tx = clamp(1.0 - thumbTip.x, 0, 1);
+      const ty = clamp(thumbTip.y, 0, 1);
+
+      if (label === "Right") {
+        // Right index
+        state.fingers[0].x = ix;
+        state.fingers[0].y = iy;
+        state.fingers[0].present = true;
+
+        // Right thumb
+        state.fingers[1].x = tx;
+        state.fingers[1].y = ty;
+        state.fingers[1].present = true;
+      } else {
+        // Left index
+        state.fingers[2].x = ix;
+        state.fingers[2].y = iy;
+        state.fingers[2].present = true;
+
+        // Left thumb
+        state.fingers[3].x = tx;
+        state.fingers[3].y = ty;
+        state.fingers[3].present = true;
+      }
+    }
+
+    for (const f of state.fingers) {
+      if (!f.present) f._pv = null;
     }
   });
 
